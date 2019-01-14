@@ -214,7 +214,7 @@ PREFERRED_CAMEL_CASE = {
     'ec2api': 'Ec2Api',
     'haproxy': 'HAProxy',
     'tripleo-ui': 'TripleoUI',
-    'metrics-qdr': 'MetricsQdr'
+    'metrics_qdr': 'MetricsQdr'
 }
 
 # Overrides for docker/puppet validation

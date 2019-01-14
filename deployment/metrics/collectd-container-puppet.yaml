@@ -284,6 +284,9 @@ parameters:
       Interval on which metrics should be sent to AMQP intermediary. If not set
       the default for all collectd plugins is used.
     default: -666
+  EnableInternalTLS:
+    type: boolean
+    default: false
 
 conditions:
   amqp_connection:
@@ -302,6 +305,7 @@ conditions:
     and:
       - equals: [{get_param: CollectdGnocchiServer}, nil]
       - equals: [{get_param: CollectdGnocchiKeystoneEndpoint}, nil]
+  internal_tls_enabled: {equals: [{get_param: EnableInternalTLS}, true]}
 
 resources:
 
@@ -317,6 +321,8 @@ outputs:
         map_merge:
           - tripleo::profile::base::metrics::collectd::enable_file_logging: true
             collectd::plugin::logfile::log_file: /var/log/collectd/collectd.log
+          - tripleo::stunnel::manage_service: false
+            tripleo::stunnel::foreground: 'yes'
           - collectd::manage_repo: false
             collectd::purge: true
             collectd::recurse: true
@@ -469,29 +475,70 @@ outputs:
             - path: /var/log/collectd
               owner: collectd:collectd
               recurse: true
+        /var/lib/kolla/config_files/collectd_tls_proxy.json:
+          command: stunnel /etc/stunnel/stunnel.conf
+          config_files:
+            - source: "/var/lib/kolla/config_files/src/*"
+              dest: "/"
+              merge: true
+              preserve_properties: true
       docker_config:
         step_5:
-          collectd:
-            image: {get_param: DockerCollectdImage}
-            net: host
-            pid: host
-            privileged: true
-            user: root
-            restart: always
-            healthcheck:
-              test: /openstack/healthcheck
-            volumes:
-              list_concat:
-                - {get_attr: [ContainersCommon, volumes]}
-                -
-                  - /var/lib/kolla/config_files/collectd.json:/var/lib/kolla/config_files/config.json:ro
-                  - /var/lib/config-data/puppet-generated/collectd/:/var/lib/kolla/config_files/src:ro
-                  - /var/log/containers/collectd:/var/log/collectd:rw,z
-                  - /var/run/openvswitch:/var/run/openvswitch:ro
-                  - /var/run/ceph:/var/run/ceph:ro
-                  - /var/run/libvirt:/var/run/libvirt:ro
-            environment:
-              - KOLLA_CONFIG_STRATEGY=COPY_ALWAYS
+          map_merge:
+            - collectd:
+                start_order: 0
+                image: {get_param: DockerCollectdImage}
+                net: host
+                pid: host
+                privileged: true
+                user: root
+                restart: always
+                healthcheck:
+                  test: /openstack/healthcheck
+                volumes:
+                  list_concat:
+                    - {get_attr: [ContainersCommon, volumes]}
+                    -
+                      - /var/lib/kolla/config_files/collectd.json:/var/lib/kolla/config_files/config.json:ro
+                      - /var/lib/config-data/puppet-generated/collectd/:/var/lib/kolla/config_files/src:ro
+                      - /var/log/containers/collectd:/var/log/collectd:rw,z
+                      - /var/run/openvswitch:/var/run/openvswitch:ro
+                      - /var/run/ceph:/var/run/ceph:ro
+                      - /var/run/libvirt:/var/run/libvirt:ro
+                environment:
+                  - KOLLA_CONFIG_STRATEGY=COPY_ALWAYS
+            - if:
+                - internal_tls_enabled
+                - collectd_tls_proxy:
+                    start_order: 2
+                    image: {get_param: DockerCollectdImage}
+                    net: host
+                    pid: host
+                    user: root
+                    restart: always
+                    healthcheck:
+                      test: /openstack/healthcheck
+                    volumes:
+                      list_concat:
+                        - {get_attr: [ContainersCommon, volumes]}
+                        -
+                          - /var/lib/kolla/config_files/collectd_tls_proxy.json:/var/lib/kolla/config_files/config.json:ro
+                          - /var/lib/config-data/puppet-generated/collectd/:/var/lib/kolla/config_files/src:ro
+                          - /etc/pki/tls/certs/redis.crt:/etc/pki/tls/certs/redis.crt:ro
+                          - /etc/pki/tls/private/redis.key:/etc/pki/tls/private/redis.key:ro
+                    environment:
+                      - KOLLA_CONFIG_STRATEGY=COPY_ALWAYS
+                - {}
+
+      metadata_settings:
+        if:
+          - internal_tls_enabled
+          -
+            - service: collectd
+              network: {get_param: [ServiceNetMap, MetricsQdrnetwork]}
+              type: node
+          - null
+
       host_prep_tasks:
         - name: create persistent directories
           file:

@@ -43,7 +43,7 @@ parameters:
     type: json
     default:
       tag: openstack.nova.consoleauth
-      path: /var/log/containers/qdrouterd/metrics-qdr.log
+      path: /var/log/containers/qdrouterd/metrics_qdr.log
   MetricsQdrPort:
     default: '5666'
     description: Service name or port number on which the qdrouterd will accept
@@ -112,6 +112,16 @@ parameters:
     default: ''
     description: Path to file containing trusted certificates for listener.
     type: string
+  MetricsQdrAuthenticateClient:
+    default: 'no'
+    description: Authenticate the client using SSL/TLS
+    type: string
+  EnableInternalTLS:
+    type: boolean
+    default: false
+
+conditions:
+  internal_tls_enabled: {equals: [{get_param: EnableInternalTLS}, true]}
 
 
 resources:
@@ -123,7 +133,7 @@ outputs:
   role_data:
     description: Role data for the metrics Qdr role.
     value:
-      service_name: metrics-qdr
+      service_name: metrics_qdr
       monitoring_subscription: {get_param: MonitoringSubscriptionQdr}
       service_config_settings:
         fluentd:
@@ -132,6 +142,25 @@ outputs:
           tripleo_fluentd_sources_metrics_qdr:
             - {get_param: MetricsQdrLoggingSource}
       config_settings:
+        if:
+          - internal_tls_enabled
+          - generate_service_certificates: true
+            tripleo::certmonger::metrics_qdr::postsave_cmd: "true" # TODO: restart metrics_qdr container here
+            metrics_qdr_certificate_specs:
+              service_certificate: '/etc/pki/tls/certs/metrics_qdr.crt'
+              service_key: '/etc/pki/tls/private/metrics_qdr.key'
+              hostname:
+                str_replace:
+                  template: "%{hiera('fqdn_NETWORK')}"
+                  params:
+                    NETWORK: {get_param: [ServiceNetMap, MetricsQdrNetwork]}
+              principal:
+                str_replace:
+                  template: "%{hiera('fqdn_NETWORK')}"
+                  params:
+                    NETWORK: {get_param: [ServiceNetMap, MetricsQdrNetwork]}
+
+          - {}
         tripleo::metrics_qdr::firewall_rules:
           '109 metrics qdr':
             dport:
@@ -158,15 +187,24 @@ outputs:
         tripleo::profile::base::metrics::qdr::listener_ssl_password: {get_param: MetricsQdrSslPassword}
         tripleo::profile::base::metrics::qdr::listener_trusted_certs: {get_param: MetricsQdrTrustedCerts}
         qdr::log_enable: 'info+'
-        qdr::log_output: '/var/log/qdrouterd/metrics-qdr.log'
+        qdr::log_output: '/var/log/qdrouterd/metrics_qdr.log'
+        qdr::listener_auth_peer: {get_param: MetricsQdrAuthenticateClient}
+      metadata_settings:
+        if:
+          - internal_tls_enabled
+          -
+            - service: metrics_qdr
+              network: {get_param: [ServiceNetMap, MetricsQdrNetwork]}
+              type: node
+          - null
       # BEGIN DOCKER SETTINGS
       puppet_config:
-        config_volume: metrics-qdr
+        config_volume: metrics_qdr
         step_config: |
           include ::tripleo::profile::base::metrics::qdr
         config_image: {get_param: DockerMetricsQdrConfigImage}
       kolla_config:
-        /var/lib/kolla/config_files/metrics-qdr.json:
+        /var/lib/kolla/config_files/metrics_qdr.json:
           command: /usr/sbin/qdrouterd -c /etc/qpid-dispatch/qdrouterd.conf
           config_files:
             - source: "/var/lib/kolla/config_files/src/*"
@@ -187,7 +225,7 @@ outputs:
             privileged: false
             user: root
             volumes:
-              - /var/log/containers/metrics-qdr:/var/log/qdrouterd:z
+              - /var/log/containers/metrics_qdr:/var/log/qdrouterd:z
             command: ['/bin/bash', '-c', 'chown -R qdrouterd:qdrouterd /var/log/qdrouterd']
           metrics_qdr:
             start_order: 1
@@ -200,10 +238,10 @@ outputs:
               list_concat:
                 - {get_attr: [ContainersCommon, volumes]}
                 -
-                  - /var/lib/kolla/config_files/metrics-qdr.json:/var/lib/kolla/config_files/config.json:ro
-                  - /var/lib/config-data/puppet-generated/metrics-qdr/:/var/lib/kolla/config_files/src:ro
-                  - /var/lib/metrics-qdr:/var/lib/qdrouterd:z
-                  - /var/log/containers/metrics-qdr:/var/log/qdrouterd:z
+                  - /var/lib/kolla/config_files/metrics_qdr.json:/var/lib/kolla/config_files/config.json:ro
+                  - /var/lib/config-data/puppet-generated/metrics_qdr/:/var/lib/kolla/config_files/src:ro
+                  - /var/lib/metrics_qdr:/var/lib/qdrouterd:z
+                  - /var/log/containers/metrics_qdr:/var/log/qdrouterd:z
             environment:
               - KOLLA_CONFIG_STRATEGY=COPY_ALWAYS
       host_prep_tasks:
@@ -213,14 +251,14 @@ outputs:
             state: directory
             setype: "{{ item.setype }}"
           with_items:
-            - { 'path': /var/log/containers/metrics-qdr, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/lib/metrics-qdr, 'setype': svirt_sandbox_file_t }
+            - { 'path': /var/log/containers/metrics_qdr, 'setype': svirt_sandbox_file_t }
+            - { 'path': /var/lib/metrics_qdr, 'setype': svirt_sandbox_file_t }
         - name: qrouterd logs readme
           copy:
             dest: /var/log/qrouterd/readme-metrics.txt
             content: |
               Log files from metrics qrouterd containers can be found under
-              /var/log/containers/metrics-qdr.
+              /var/log/containers/metrics_qdr.
           ignore_errors: true
       post_upgrade_tasks:
         - when: step|int == 1

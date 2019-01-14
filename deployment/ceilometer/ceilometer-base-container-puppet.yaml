@@ -114,6 +114,9 @@ parameters:
         Messaging client subscriber parameter to specify
         an SSL connection to the messaging host.
     type: string
+  EnableInternalTLS:
+    type: boolean
+    default: false
 
 parameter_groups:
 - label: deprecated
@@ -127,6 +130,8 @@ parameter_groups:
 
 conditions:
   service_debug_unset: {equals : [{get_param: CeilometerDebug}, '']}
+  internal_tls_enabled: {equals: [{get_param: EnableInternalTLS}, true]}
+
 
 outputs:
   role_data:
@@ -134,6 +139,30 @@ outputs:
     value:
       service_name: ceilometer_base
       config_settings:
+        if:
+          - internal_tls_enabled
+          - generate_service_certificates: true
+            tripleo::certmonger::ceilometer_base::postsave_cmd: "true" # TODO: restart ceilometer_base container here
+            ceilometer_base_certificate_specs:
+              service_certificate: '/etc/pki/tls/certs/ceilometer_base.crt'
+              service_key: '/etc/pki/tls/private/ceilometer_base.key'
+              hostname:
+                str_replace:
+                  template: "%{hiera('fqdn_NETWORK')}"
+                  params:
+                    NETWORK: {get_param: [ServiceNetMap, GnocchiApiNetwork]}
+              principal:
+                str_replace:
+                  template: "%{hiera('fqdn_NETWORK')}"
+                  params:
+                    NETWORK: {get_param: [ServiceNetMap, GnocchiApiNetwork]}
+            if:
+              - ceilometer_qdr_publish
+              - ceilometer::amqp_ssl_cert_file: '/etc/pki/tls/certs/ceilometer_base.crt'
+                ceilometer::amqp_ssl_key_file: '/etc/pki/tls/private/ceilometer_base.key'
+              - {}
+
+          - {}
         ceilometer::logging::debug:
           if:
           - service_debug_unset
@@ -179,3 +208,11 @@ outputs:
           ceilometer::keystone::auth::tenant: 'service'
           # Enable default notification queue
           tripleo::profile::base::keystone::ceilometer_notification_topics: ["notifications"]
+      metadata_settings:
+        if:
+          - internal_tls_enabled
+          -
+            - service: ceilometer_base
+              network: {get_param: [ServiceNetMap, GnocchiApiNetwork]}
+              type: node
+          - null
